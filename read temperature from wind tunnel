@@ -1,0 +1,34 @@
+#thermocouple.py
+#returns values of temperature using the NIST calibration coefficients first, later will use the coefficient we get from our own calibration
+import numpy as np 
+import xlwt					#for making changes to a workbook
+import u6					#for the LabJack
+import time					#for the time.sleep() function
+k=u6.U6()
+k.getCalibrationData()
+
+#Opening a workbook
+book=xlwt.workbook()
+sh=book.add_sheet()
+sh.write(0, 0, "Power")
+sh.write(0, 1, "Temperature")
+
+poly=[-7.293422*10^-7, 6.048144*10^-5, -2.165394*10^-3, 4.637791*10^-2, -7.602961*10^-1, 2.592800*10^1, 0]		#NIST calibration coefficients
+
+while(1==1)
+
+j=0
+for j in range(6)
+channel=j
+v=float(k.getAIN(channel, resolutionIndex=12, gainIndex=3, settlingFactor=9))
+v=v*1000	
+T=np.polyval(poly, v)
+t=time.time()	
+sh.write(i,0,t)															#converting volts to millivolts
+sh.write(i, 1, T)
+
+
+
+time.sleep(10000)
+
+book.save("test1.xls")
