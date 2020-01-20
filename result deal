@@ -1,0 +1,210 @@
+addpath('./Properties and Constants/')
+addpath('./analysisFunctions/')
+addpath('./Matlab2Tikz/')
+addpath('./functions/')
+addpath('./rawdata/')
+%naphthalene free injection
+clear all, close all, clc
+
+%%%001 inputs
+expDate=[2020,01,02,0,0,0];
+initialScanTime=[0 0 0];
+expStartTime=[1 19 16];
+expEndTime=[2 49 16];
+finalScanTime=[2 59 26];
+reynoldsGoal=6.0e5;
+blowingGoal=0.5;
+tIGoal='high';
+swirlGoal=0;
+satGoal='no';
+pass23='no';
+pass34='yes';
+downstream='yes';
+analysisType = 'StraightSlot';
+
+fileString = strsplit(mfilename('fullpath'), '\');
+dateStr=strsplit(mfilename(fileString(end)), 'n');
+dateStr = dateStr{end};
+dataRun=importdata('Data0102.dat','\t',1);
+dataProfileBef=dlmread('20200116_bef','',[0 0 4059 2]);
+dataProfileAft=dlmread('20200116_aft','',[0 0 4059 2]);
+
+
+%%%002 constants    unit: m T:C
+bladePitch=0.13811;
+coordLength=0.18415;
+coordAxialLength=0.12964;
+bladeHeight=0.4572;
+areaRatio=2.724;
+beta=0.5925;
+diameter1=0.052725;
+diameter2=diameter1*beta;
+injectArea=.004*.4244;   %%%% straight slot
+kAir=1.4;
+bladex=-1.275;
+bladey=4.865;
+
+%%%%%  straight slot
+DX=-1.390;
+DY=-.707;
+X0=DX-bladex;
+Y0=DY-bladey;
+X0=X0+0.08;
+% X0 = X0+.03; % best estimate correction
+% Y0 = Y0-.02; % best estimate correction
+Y0 = Y0+0.21;
+x1slot=-.0186;
+x2slot=-.0130;
+y1slot=-.154-.077;
+y2slot=.130+.063;    
+Xslot=[x1slot;x1slot;x2slot;x2slot]/coordAxialLength;
+Yslot=[y1slot;y2slot;y2slot;y1slot]/coordAxialLength;
+
+%blade geometry
+blade1=load('./Geometry/blade_xy1');
+blade1(:,1)=(blade1(:,1)+bladex)/coordAxialLength*.0254;
+blade1(:,2)=(blade1(:,2)+bladey)/coordAxialLength*.0254;
+blade2=load('./Geometry/blade_xy2');
+blade2(:,1)=(blade2(:,1)+bladex)/coordAxialLength*.0254;
+blade2(:,2)=(blade2(:,2)+bladey)/coordAxialLength*.0254;
+blade3=load('./Geometry/blade_xy3');
+blade3(:,1)=(blade3(:,1)+bladex)/coordAxialLength*.0254;
+blade3(:,2)=(blade3(:,2)+bladey)/coordAxialLength*.0254;
+
+%%%003 data reduction
+    %%%grab data
+pAtm=dataRun.data(:,2);
+pStatic=dataRun.data(:,3);
+pDynamic=dataRun.data(:,4);
+% p1=dataRun.data(:,5);
+% p2=dataRun.data(:,6);
+tRoom=dataRun.data(:,11);
+tTunnel=dataRun.data(:,12);
+% tOrifice=dataRun.data(:,15);
+tMass1=dataRun.data(:,9);
+tMass2=dataRun.data(:,10);
+% [tRoom, tTunnel, tOrifice, ~, tMass1, tMass2] = fixTemperatures(tRoom, tTunnel, tOrifice, tOrifice, tMass1, tMass2);
+    %calculations
+expTime=expEndTime-expStartTime;
+expTime=expTime(1)*3600+expTime(2)*60+expTime(3);
+totalTime=finalScanTime-initialScanTime;
+totalTime=totalTime(1)*3600+totalTime(2)*60+totalTime(3);
+naturalConvectionTime = max(0, totalTime - expTime); % assume 10 minutes in saturated box with no sublimation
+    %tunnel calcs
+tunnelDensity=AirDensity(pStatic,tTunnel);
+pitotDensity=AirDensity(pStatic+pDynamic/2,tTunnel);
+tunnelVelocity=sqrt(2*pDynamic./pitotDensity);
+tunnelVelocity=sqrt(tunnelVelocity.^2/(1+.05^2)); % 5% turbulence correction
+tunnelVelocityExit=tunnelVelocity*areaRatio;
+tunnelKinematicViscosity=AirKinematicViscosity(tTunnel,pStatic);
+reynoldsNumberTunnel=mean(tunnelVelocityExit.*coordLength./tunnelKinematicViscosity);
+reynoldsNumberTunnel_std=std(tunnelVelocityExit.*coordLength./tunnelKinematicViscosity);
+U_Re = 2*reynoldsNumberTunnel_std/reynoldsNumberTunnel;
+
+%naphthalene properties
+tMass=mean([tMass1 tMass2],2);
+tFilm=mean([tMass tTunnel],2);
+pVapNap=NaphthaleneVaporPressure(tMass);
+rhoNapVap=mean(NaphthaleneVaporDensity(pVapNap,tMass));
+dNapAir=mean(NaphthaleneAirDiffusionCoefficient(tFilm,pStatic));
+ScNum = mean(scAirNap(tFilm));
+ScNum_std = std(scAirNap(tFilm));
+U_Sc = 2*ScNum_std/ScNum;
+X0old=X0;
+Y0old=Y0;
+
+
+% calc voltage difference
+correctX0Y0=false;
+[x, y, voltageDifference, X0, Y0]=correctVoltAndXYOrigin(dataProfileBef,dataProfileAft,blade1,blade2,blade3,X0,Y0,correctX0Y0);
+X0-X0old;
+Y0-Y0old;
+
+% put in scaled coordinate system
+y=(y-Y0)/coordAxialLength*.0254;
+x=(x-X0)/coordAxialLength*.0254;
+
+% prepare natural convection correction
+load('./NatCorrection.mat')
+xNat = (x-min(x(:)))/(max(x(:))-min(x(:)))*(xmaxNat-xminNat)+xminNat; % adjust coordinates
+SherwoodNatural = feval(fitResultNatCurve,xNat); % use for regular plate
+%SherwoodNatural = fitResultNat(xNat,y); % use for discrete plate
+%SherwoodNatural = 10*ones(size(x)); % treat as 10 across the whole plate
+%SherwoodNatural = SherwoodNatural*1.2; % since motion of scanner and moving plate around add small guesstimate enhancement
+massTransferCoefficientNatural = SherwoodNatural*dNapAir/coordLength;
+massFluxNatural = massTransferCoefficientNatural*rhoNapVap;
+depthNatural = massFluxNatural*naturalConvectionTime/NaphthaleneSolidDensity;
+
+% calc Sherwood'
+depth=voltageDifference/0.052365*1e-6;%from lvdt calibration
+massFlux=(depth-depthNatural)*NaphthaleneSolidDensity/expTime;
+massTransferCoefficient=massFlux/rhoNapVap;
+Sherwood=massTransferCoefficient*coordLength/dNapAir;
+correctionFactor = (reynoldsGoal/reynoldsNumberTunnel)^(0.65)*(2.28/ScNum)^(1/3); % 0.65 roughly based on comparison of 300k and 600k exps
+if abs(correctionFactor-1) > 0.05
+    warning('large correction factor')
+end
+Sherwood = Sherwood*correctionFactor;
+z=Sherwood;
+
+% remove points not exposed to air
+indexOutside=~(inpolygon(x,y,blade1(:,1),blade1(:,2))|inpolygon(x,y,blade2(:,1),blade2(:,2))|inpolygon(x,y,blade3(:,1),blade3(:,2)));
+xOutside=x(indexOutside);
+yOutside=y(indexOutside);
+zOutside=z(indexOutside);
+
+% keep positive sherwood numbers only
+indexPossible = zOutside>0;
+xOutside=xOutside(indexPossible);
+yOutside=yOutside(indexPossible);
+zOutside=zOutside(indexPossible);
+
+% also remove unreasonably small sherwood numbers
+opts = fitoptions( 'Method', 'LowessFit' );
+opts.Span = 0.01; % pct of span
+pval = 0.05;
+oneSided = true;
+
+% resample over uniform grid
+    xgv=-.025:.01:1.355;
+    ygv=-2.06:.01:1.03;
+[xOutside,yOutside,zOutside,~,numOutliersRemoved]= removeOutliers2D(xOutside,yOutside,zOutside,'loess',opts,100,pval,oneSided,false,true);
+[xi, yi]=meshgrid(xgv,ygv);
+F=scatteredInterpolant(xOutside,yOutside,zOutside,'natural','linear');
+zi=F(xi,yi);
+
+save(strcat(analysisType,'Save/',dateStr),'xi','yi','zi')
+
+%%%% prepare for plot
+% remove points under fillet and other areas
+zi(inpolygon(xi,yi,blade1(:,1),blade1(:,2)))=NaN;
+zi(inpolygon(xi,yi,blade2(:,1),blade2(:,2)))=NaN;
+zi(inpolygon(xi,yi,blade3(:,1),blade3(:,2)))=NaN;
+
+
+
+%%%% contour
+az = 0;
+el = 90;
+axisrange=[-.2 1.3 -1.5 1.1];
+    
+figure
+surf(xi,yi,zi);
+contour_lvls=20;
+extra_axis_options = sprintf('axis equal image, colormap access=piecewise constant, colorbar sampled, colorbar style={samples=%d}',contour_lvls+1);
+limit=3000;
+contour_lvls=20;
+caxis([0 limit])
+axis(axisrange)
+shading flat
+colorbar
+colormap(parula(contour_lvls))
+axis square
+view(az, el);
+xlabel('x/Cax')
+ylabel('y/Cax')
+%%%%
+hold on
+plot(blade1(:,1),blade1(:,2),'k')
+plot(blade2(:,1),blade2(:,2),'k')
+
