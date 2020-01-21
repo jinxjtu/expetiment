@@ -1,0 +1,22 @@
+%%%%%python2
+
+import os
+import main, equipment, xytable
+import user_interface as UI
+
+#Instantiate objects
+mx_dmm = equipment.MxDmm()
+LVDT = xytable.Motors()
+#LVDT = []
+
+#Run main loop
+main_menu_opt = ''
+while main_menu_opt not in ['E','e']:
+	os.system('clear')
+	UI.print_menu(UI.menus['main_menu'])
+	main_menu_opt = UI.get_option(UI.menus['main_menu'])
+	main.switch(main_menu_opt.upper(),mx_dmm,LVDT)
+	
+print
+mx_dmm.close()
+LVDT.close()
